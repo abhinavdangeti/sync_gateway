@@ -60,3 +60,12 @@ func GoCBv2TimeoutsConfig(bucketOpTimeout, viewQueryTimeout *time.Duration) (tc 
 	}
 	return tc
 }
+
+// GoCBv2FailFastRetryStrategy represents a strategy that will never retry.
+type GoCBv2FailFastRetryStrategy struct{}
+
+var _ gocb.RetryStrategy = &GoCBv2FailFastRetryStrategy{}
+
+func (rs *GoCBv2FailFastRetryStrategy) RetryAfter(req gocb.RetryRequest, reason gocb.RetryReason) gocb.RetryAction {
+	return &gocb.NoRetryRetryAction{}
+}
