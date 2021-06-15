@@ -79,7 +79,7 @@ type LegacyServerConfig struct {
 	ConfigServer               *string                  `json:",omitempty"`                       // URL of config server (for dynamic db discovery)
 	Facebook                   *FacebookConfig          `json:",omitempty"`                       // Configuration for Facebook validation
 	Google                     *GoogleConfig            `json:",omitempty"`                       // Configuration for Google validation
-	CORS                       *CORSConfig              `json:",omitempty"`                       // Configuration for allowing CORS
+	CORS                       *CORSConfigOld           `json:",omitempty"`                       // Configuration for allowing CORS
 	DeprecatedLog              []string                 `json:"log,omitempty"`                    // Log keywords to enable
 	DeprecatedLogFilePath      *string                  `json:"logFilePath,omitempty"`            // Path to log file, if missing write to stderr
 	Logging                    *base.LoggingConfig      `json:",omitempty"`                       // Configuration for logging with optional log file rotation
@@ -224,6 +224,13 @@ type GoogleConfig struct {
 	AppClientID []string `json:"app_client_id"` // list of enabled client ids
 }
 
+type CORSConfigOld struct {
+	Origin      []string // List of allowed origins, use ["*"] to allow access from everywhere
+	LoginOrigin []string // List of allowed login origins
+	Headers     []string // List of allowed headers
+	MaxAge      int      // Maximum age of the CORS Options request
+}
+
 type EventHandlerConfig struct {
 	MaxEventProc    uint           `json:"max_processes,omitempty"`    // Max concurrent event handling goroutines
 	WaitForProcess  string         `json:"wait_for_process,omitempty"` // Max wait time when event queue is full (ms)
@@ -305,32 +312,35 @@ func GetTLSVersionFromString(stringV *string) uint16 {
 
 func (dbConfig *DbConfig) setup(name string) error {
 
-	if dbConfig.Server == nil {
-		return base.HTTPErrorf(http.StatusBadRequest, "Empty 'server' property in dbConfig")
-	}
+	// FIXME: Inherit from bootstrap config?
+	// if dbConfig.Server == nil {
+	// 	return base.HTTPErrorf(http.StatusBadRequest, "Empty 'server' property in dbConfig")
+	// }
 
 	dbConfig.Name = name
 	if dbConfig.Bucket == nil {
 		dbConfig.Bucket = &dbConfig.Name
 	}
 
-	url, err := url.Parse(*dbConfig.Server)
-	if err != nil {
-		return err
-	}
-	if url.User != nil {
-		// Remove credentials from URL and put them into the DbConfig.Username and .Password:
-		if dbConfig.Username == "" {
-			dbConfig.Username = url.User.Username()
+	if dbConfig.Server != nil {
+		url, err := url.Parse(*dbConfig.Server)
+		if err != nil {
+			return err
 		}
-		if dbConfig.Password == "" {
-			if password, exists := url.User.Password(); exists {
-				dbConfig.Password = password
+		if url.User != nil {
+			// Remove credentials from URL and put them into the DbConfig.Username and .Password:
+			if dbConfig.Username == "" {
+				dbConfig.Username = url.User.Username()
 			}
+			if dbConfig.Password == "" {
+				if password, exists := url.User.Password(); exists {
+					dbConfig.Password = password
+				}
+			}
+			url.User = nil
+			urlStr := url.String()
+			dbConfig.Server = &urlStr
 		}
-		url.User = nil
-		urlStr := url.String()
-		dbConfig.Server = &urlStr
 	}
 
 	// Load Sync Function.
@@ -879,13 +889,13 @@ func (sc *StartupConfig) SetupAndValidateLogging() (err error) {
 	return base.InitLogging(
 		defaultLogFilePath,
 		sc.Logging.LogFilePath,
-		*sc.Logging.Console,
-		*sc.Logging.Error,
-		*sc.Logging.Warn,
-		*sc.Logging.Info,
-		*sc.Logging.Debug,
-		*sc.Logging.Trace,
-		*sc.Logging.Stats,
+		sc.Logging.Console,
+		sc.Logging.Error,
+		sc.Logging.Warn,
+		sc.Logging.Info,
+		sc.Logging.Debug,
+		sc.Logging.Trace,
+		sc.Logging.Stats,
 	)
 }
 
@@ -1357,10 +1367,18 @@ func startServer(config *StartupConfig, sc *ServerContext) error {
 	go sc.PostStartup()
 
 	base.Consolef(base.LevelInfo, base.KeyAll, "Starting metrics server on %s", config.API.MetricsInterface)
-	go config.Serve(config.API.MetricsInterface, CreateMetricHandler(sc))
+	go func() {
+		if err := config.Serve(config.API.MetricsInterface, CreateMetricHandler(sc)); err != nil {
+			base.Errorf("Error starting the Metrics API: %v", err)
+		}
+	}()
 
 	base.Consolef(base.LevelInfo, base.KeyAll, "Starting admin server on %s", config.API.AdminInterface)
-	go config.Serve(config.API.AdminInterface, CreateAdminHandler(sc))
+	go func() {
+		if err := config.Serve(config.API.AdminInterface, CreateAdminHandler(sc)); err != nil {
+			base.Errorf("Error starting the Admin API: %v", err)
+		}
+	}()
 
 	base.Consolef(base.LevelInfo, base.KeyAll, "Starting server on %s ...", config.API.PublicInterface)
 	return config.Serve(config.API.PublicInterface, CreatePublicHandler(sc))
